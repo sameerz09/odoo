@@ -311,30 +311,7 @@ class AccountBalance(models.Model):
 
         return {'invoice_info': invoice_data}
 
-    @api.model
-    def delete_bill(self, bill_id):
-        Bill = self.env['account.move']
-        bill = Bill.search([('id', '=', bill_id), ('move_type', '=', 'in_invoice')])
-
-        if not bill:
-            return "Bill not found."
-
-        # Check if the bill is posted (validated)
-        if bill.state == 'posted':
-            # Add logic to cancel related journal entries (if any)
-            # Example: bill.button_draft() or bill.button_cancel()
-            try:
-                bill.button_draft()  # Reset to draft
-            except Exception as e:
-                return "Failed to reset bill to draft: {}".format(e)
-
-        # Additional logic to unreconcile payments if the bill is reconciled
-
-        try:
-            bill.unlink()  # Delete the bill
-            return "Bill deleted successfully."
-        except Exception as e:
-            return "Failed to delete bill: {}".format(e)
+    
 
     ##create/get/delete_bills payment
 
@@ -445,51 +422,7 @@ class AccountBalance(models.Model):
         payment.action_post()
         return {'success': 'Payment successfully processed.', 'payment_id': payment.id}
 
-    @api.model
-    def create_bill_payment(self, invoice_id, journal_id, payment_date, payment_amount, payment_method_id):
-        """
-        This method processes a payment for an Accounts Receivable (AR) invoice.
 
-        Args:
-            invoice_id (int): The ID of the AR invoice to be paid.
-            journal_id (int): The ID of the payment journal.
-            payment_date (date): The date when the payment is made.
-            payment_amount (float): The total amount of the payment.
-            payment_method_id (int): The ID of the used payment method.
-
-        Returns:
-            dict: A dictionary containing either a success message and payment ID, or an error message.
-        """
-        # Fetching the specified AR invoice
-        invoice = self.env['account.move'].browse(invoice_id)
-
-        # Validation checks for the invoice
-        if not invoice:
-            return {'error': 'Invalid Bill: Not found  the Bill Number.'}
-        if invoice.move_type != 'in_invoice':
-            return {'error': 'the type not in_invoice'}
-
-        if invoice.state != 'posted':
-            return {'error': 'Invoice processing error: Must be in "posted" state.'}
-        payment_method_line = self.env['account.payment.method.line'].search(
-            [('payment_method_id', '=', payment_method_id)], limit=1)
-        if not payment_method_line:
-            return {'error': 'Invalid payment method or payment method line not found.'}
-
-        # Creating the payment record
-        payment = self.env['account.payment'].create({
-            'payment_type': 'inbound',
-            'partner_type': 'supplier',
-            'partner_id': invoice.partner_id.id,
-            'amount': payment_amount,
-            'journal_id': journal_id,
-            'payment_method_line_id': payment_method_line.id,
-            'invoice_line_ids': [(6, 0, [invoice_id])],
-        })
-
-        # Validating the payment
-        payment.action_post()
-        return {'success': 'Payment successfully processed.', 'payment_id': payment.id}
 
 
     @api.model
