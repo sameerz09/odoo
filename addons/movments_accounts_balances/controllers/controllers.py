@@ -112,7 +112,7 @@ class AccountBalance(models.Model):
                 'quantity': line.get('quantity', 1.0),
                 'price_unit': line.get('price_unit', 0.0),
                 'account_id': line.get('account_id'),
-                'product_id': line.get('product_id', False),
+
             }
             bill_lines.append((0, 0, bill_line_vals))
 
@@ -311,7 +311,7 @@ class AccountBalance(models.Model):
 
         return {'invoice_info': invoice_data}
 
-    
+
 
     ##create/get/delete_bills payment
 
