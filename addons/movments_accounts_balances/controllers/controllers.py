@@ -100,87 +100,176 @@ class AccountBalance(models.Model):
 
     ##create/get/delete_bills
     @api.model
-    def create_bill(self, invoice_vals, partner_id, invoice_date, invoice_date_due, reference, narration):
+    def create_bill(self, bill_vals, partner_id, bill_date, bill_date_due, reference, narration):
         """
-        Create an AR invoice and corresponding analytic lines based on the provided data.
+        Create a bill and corresponding analytic lines based on the provided data.
         """
         # Prepare the invoice lines
-        invoice_lines = []
-        for line in invoice_vals:
-            invoice_line_vals = {
+        bill_lines = []
+        for line in bill_vals:
+            bill_line_vals = {
                 'name': line.get('description', ''),
                 'quantity': line.get('quantity', 1.0),
                 'price_unit': line.get('price_unit', 0.0),
                 'account_id': line.get('account_id'),
                 'product_id': line.get('product_id', False),
             }
-            invoice_lines.append((0, 0, invoice_line_vals))
+            bill_lines.append((0, 0, bill_line_vals))
 
         # Create a new AR invoice record
-        invoice = self.env['account.move'].create({
+        bill = self.env['account.move'].create({
             'move_type': 'in_invoice',
             'partner_id': partner_id,
-            'invoice_date': invoice_date,
-            'invoice_date_due': invoice_date_due,
+            'invoice_date': bill_date,
+            'invoice_date_due': bill_date_due,
             'ref': self.name,
             'narration': narration,
-            'invoice_line_ids': invoice_lines,
+            'invoice_line_ids': bill_lines,
         })
-        invoice.action_post()
+        bill.action_post()
 
         # Create analytic lines for each invoice line if analytic_account_id is provided
-        for line, line_vals in zip(invoice.invoice_line_ids, invoice_vals):
+        for line, line_vals in zip(bill.invoice_line_ids, bill_lines):
             analytic_account_id = line_vals.get('analytic_account_id')
             if analytic_account_id:
                 self.env['account.analytic.line'].create({
-                    'account_id': analytic_account_id,
+                    # 'account_id': analytic_account_id,
+                    'account_id': 1,
                     'name': line.name,
                     'amount': line.price_subtotal,  # or any other relevant amount
                     # 'move_id': line.id,
                     # Add other necessary fields
                 })
 
-        return f"ID: {invoice.id}, Name: {invoice.name}, Amount: {invoice.amount_total}, Date: {invoice.invoice_date}, Due Date: {invoice.invoice_date_due}"
+        return f"ID: {bill.id}, Name: {bill.name}, Amount: {bill.amount_total}, Date: {bill.invoice_date}, Due Date: {bill.invoice_date_due}"
 
     @api.model
     def get_bill(self, bill_id):
-        """
-        Retrieve a bill and its details based on the bill ID.
-        :param bill_id: ID of the bill to retrieve.
-        :return: A dictionary containing the bill data or an error message.
-        """
         # Define search criteria to filter bills
         domain = [
             ('id', '=', bill_id),
             ('move_type', '=', 'in_invoice'),
         ]
 
-        # Retrieve the bill based on the criteria
-        bill = self.env['account.move'].search(domain, order='invoice_date', limit=1)
-        if not bill:
-            return {'error': 'Bill not found'}
+        # Retrieve bills based on the criteria
+        bill = self.env['account.move'].search(domain, order='invoice_date')
 
-        # Prepare data for invoice lines
-        invoice_line_data = [{
-            'line_id': line.id,
-            'account_id': line.account_id.id,
-            'account_name': line.account_id.name,
-            'quantity': line.quantity,
-            'price_unit': line.price_unit,
-        } for line in bill.invoice_line_ids]
+        # Prepare a list to store bill data
+        bill_data = []
+
+        # for bill in bills:
+        # Retrieve invoice lines for each bill
+        bill_lines = bill.invoice_line_ids
+        selected_account_id = (
+                bill_lines and bill_lines[0].account_id.name or False
+        )
 
         # Assemble bill data
-        bill_data = {
+        bill_data.append({
             'id': bill.id,
-            'bill_number': bill.ref,
+            'bill_number': bill.id,
             'bill_date': bill.invoice_date,
             'supplier_id': bill.partner_id.name,
             'amount': bill.amount_total,
             'state': bill.payment_state,
-            'invoice_lines': invoice_line_data,
-        }
+            'selected_account_id': selected_account_id,
+            # Add more bill details here as needed
+        })
 
-        return {'bill_info': bill_data}
+        # Create a dictionary with a "bill_info" key
+        response = {'invoice_info': bill_data}
+
+        return response
+
+    @api.model
+    def delete_bill(self, bill_id):
+        Bill = self.env['account.move']
+        # bill = Bill.search([('id', '=', bill_id), ('move_type', '=', 'in_invoice')])
+        bill = Bill.search([('id', '=', bill_id)])
+
+        if not bill:
+            return "Bill not found."
+
+        # Check if the bill is posted (validated)
+        if bill.state == 'posted':
+            # Add logic to cancel related journal entries (if any)
+            # Example: bill.button_draft() or bill.button_cancel()
+            try:
+                bill.button_draft()  # Reset to draft
+            except Exception as e:
+                return "Failed to reset bill to draft: {}".format(e)
+
+        # Additional logic to unreconcile payments if the bill is reconciled
+
+        try:
+            bill.unlink()  # Delete the bill
+            return "Bill deleted successfully."
+        except Exception as e:
+            return "Failed to delete bill: {}".format(e)
+
+    @api.model
+    def create_bill_payment(self, bill_vals, partner_id, bill_date, bill_date_due, ref, narration,
+                            payment_method_id, journal_id):
+        """
+        Create a bill payment based on the provided data.
+
+        :param bill_vals: List of dictionaries containing line data for the payment.
+        :param partner_id: Partner ID for the payment.
+        :param bill_date: Bill date for the payment.
+        :param bill_date_due: Due date for the payment.
+        :param ref: Reference for the payment.
+        :param narration: Narration for the payment.
+        :param payment_method_id: ID of the payment method used for the payment.
+        :param journal_id: ID of the journal to record the payment.
+        :return: The created payment record.
+        """
+        # Create a new payment record
+        payment = self.env['account.payment'].create({
+            'move_type': 'in_invoice',
+            'partner_id': partner_id,
+            'payment_type': 'outbound',  # For bill payment, it's typically 'outbound'
+            'payment_method_id': payment_method_id,
+            'journal_id': journal_id,
+            'payment_date': bill_date,  # Set payment date as the invoice date or adjust as needed
+            'communication': ref,  # Communication can be used as reference
+            'invoice_ids': [(0, 0, bill_vals)],
+            'invoice_date': bill_date,
+            'invoice_date_due': bill_date_due,
+            'ref': ref,
+            'narration': narration,
+        })
+
+        return payment
+
+    @api.model
+    def delete_bill_payment(self, payment_id):
+        invoice = self.env['account.move']
+        payment = invoice.search([('id', '=', payment_id), ('move_type', '=', 'entry')])
+
+        if not payment:
+            return "Payment not found."
+
+        # Check if the bill is posted (validated)
+        if payment.state == 'posted':
+            # Add logic to cancel related journal entries (if any)
+            # Example: bill.button_draft() or bill.button_cancel()
+            try:
+                payment.button_draft()  # Reset to draft
+            except Exception as e:
+                return "Failed to reset Payment to draft: {}".format(e)
+
+        # Additional logic to unreconcile payments if the Invoice is reconciled
+
+        try:
+            payment.unlink()  # Delete the bill
+            return "Payment deleted successfully."
+        except Exception as e:
+            return "Failed to delete Payment: {}".format(e)
+
+
+
+
+    #### create / get / delete_invoice_payment
 
     @api.model
     def get_invoice(self, invoice_id):
@@ -248,36 +337,7 @@ class AccountBalance(models.Model):
             return "Failed to delete bill: {}".format(e)
 
     ##create/get/delete_bills payment
-    @api.model
-    def create_bill_payment(self, invoice_vals, partner_id, invoice_date, invoice_date_due, ref, narration):
-        """
-        Create a payment based on the provided data.
 
-        :param invoice_vals: List of dictionaries containing line data for the payment.
-        :param partner_id: Partner ID for the payment.
-        :param invoice_date: Invoice date for the payment.
-        :param invoice_date_due: Due date for the payment.
-        :param ref: Reference for the payment.
-        :param narration: Narration for the payment.
-        :return: The created payment record.
-        """
-        # Create a new payment record
-        payment = self.env['account.payment'].create({
-            'move_type': 'in_invoice',
-            'partner_id': partner_id,
-            'invoice_date': invoice_date,
-            'invoice_date_due': invoice_date_due,
-            'ref': ref,
-            'narration': narration,
-            'invoice_line_ids': [(0, 0, {
-                'name': line.get('description', ''),
-                'price_unit': line.get('amount', 0.0),
-                'account_id': line.get('account_id'),
-                # 'analytic_account_id': line.get('analytic_account_id', False),
-            }) for line in invoice_vals],
-        })
-
-        return payment
 
     @api.model
     def get_bill_payment(self, payment_id):
@@ -340,32 +400,7 @@ class AccountBalance(models.Model):
             return {'error': "No payment found for the provided journal entry ID."}
 
 
-    @api.model
-    def delete_bill_payment(self, payment_id):
-        invoice = self.env['account.move']
-        payment = invoice.search([('id', '=', payment_id), ('move_type', '=', 'in_invoice')])
 
-        if not payment:
-            return "Payment not found."
-
-        # Check if the bill is posted (validated)
-        if payment.state == 'posted':
-            # Add logic to cancel related journal entries (if any)
-            # Example: bill.button_draft() or bill.button_cancel()
-            try:
-                payment.button_draft()  # Reset to draft
-            except Exception as e:
-                return "Failed to reset Payment to draft: {}".format(e)
-
-        # Additional logic to unreconcile payments if the Invoice is reconciled
-
-        try:
-            payment.unlink()  # Delete the bill
-            return "Payment deleted successfully."
-        except Exception as e:
-            return "Failed to delete Payment: {}".format(e)
-
-    #### create / get / delete_invoice_payment
 
     @api.model
     def create_ar_invoice_payment(self, invoice_id, journal_id, payment_date, payment_amount, payment_method_id):
@@ -523,53 +558,8 @@ class AccountBalance(models.Model):
 
     #####create/get/delete_invoice
 
-
-    # @api.model
-    # def create_ar_invoice(self, invoice_vals, partner_id, invoice_date, invoice_date_due, ref, narration):
-    #     """
-    #     Create an AR invoice and corresponding analytic lines based on the provided data.
-    #     """
-    #     # Prepare the invoice lines
-    #     invoice_lines = []
-    #     for line in invoice_vals:
-    #         invoice_line_vals = {
-    #             'name': line.get('description', ''),
-    #             'quantity': line.get('quantity', 1.0),
-    #             'price_unit': line.get('price_unit', 0.0),
-    #             'account_id': line.get('account_id'),
-    #             'product_id': line.get('product_id', False),
-    #         }
-    #         invoice_lines.append((0, 0, invoice_line_vals))
-    #
-    #     # Create a new AR invoice record
-    #     invoice = self.env['account.move'].create({
-    #         'move_type': 'out_invoice',
-    #         'partner_id': partner_id,
-    #         'invoice_date': invoice_date,
-    #         'invoice_date_due': invoice_date_due,
-    #         'ref': ref,
-    #         'narration': narration,
-    #         'invoice_line_ids': invoice_lines,
-    #     })
-    #
-    #     # Create analytic lines for each invoice line if analytic_account_id is provided
-    #     for line, line_vals in zip(invoice.invoice_line_ids, invoice_vals):
-    #         analytic_account_id = line_vals.get('analytic_account_id')
-    #         if analytic_account_id:
-    #             self.env['account.analytic.line'].create({
-    #                 'account_id': analytic_account_id,
-    #                 'name': line.name,
-    #                 'amount': line.price_subtotal,  # or any other relevant amount
-    #                 # 'move_id': line.id,
-    #                 # Add other necessary fields
-    #             })
-    #
-    #     return {
-    #         'id': invoice.id,
-    #         'message': 'Invoice created successfully with analytic lines'
-    #     }
     @api.model
-    def create_invoice(self, invoice_vals, partner_id, invoice_date, invoice_date_due, reference, narration):
+    def create_ar_invoice(self, invoice_vals, partner_id, invoice_date, invoice_date_due, reference, narration):
         """
         Create an AR invoice and corresponding analytic lines based on the provided data.
         """
@@ -727,32 +717,48 @@ class AccountBalance(models.Model):
 
     @api.model
     def cancel_and_delete_bill_payment(self, payment_id):
+        """
+        Cancels and deletes a bill payment based on the provided payment ID.
+
+        Parameters:
+        payment_id (int): The ID of the payment to be cancelled and deleted.
+
+        Returns:
+        str: A message indicating the outcome of the operation.
+        """
         Payment = self.env['account.move']
         payment = Payment.browse(payment_id)
 
+        # Check if the payment exists
         if not payment:
             return "Payment not found."
 
-        # Attempt to cancel the payment if it's not already in a cancellable state
+        # Check if the payment is already in a state that allows cancellation
         if payment.state not in ['draft', 'cancelled']:
             try:
+                if payment.state == 'posted':
+                            payment.button_draft()  # Example method call to reverse the payment
+                            payment.write({'state': 'cancelled'})
+                else:
+                     return "Payment is in a state that cannot be cancelled."
 
             except UserError as e:
-                return "Failed to cancel payment: {}".format(e)
+                return f"Failed to cancel payment: {e}"
             except ValidationError as e:
-                return "Validation error occurred: {}".format(e)
+                return f"Validation error occurred: {e}"
             except Exception as e:
-                return "Unexpected error occurred: {}".format(e)
+                return f"Unexpected error occurred: {e}"
 
-        # Check again if the payment is in a cancellable state after attempting cancellation
+        # Proceed to delete the payment if it is in a cancellable state
         if payment.state in ['draft', 'cancelled']:
             try:
                 payment.unlink()
                 return "Payment deleted successfully."
             except Exception as e:
-                return "Failed to delete payment: {}".format(e)
-        else:
-            return "Payment cannot be deleted as it is not in draft or cancelled state."
+                return f"Failed to delete payment: {e}"
+
+        return "Payment cannot be deleted as it is not in a draft or cancelled state."
+
 
 
 
